@@ -65,6 +65,69 @@ This will extract the `portainer-mcp` executable.
 **Move the executable:**
 Move the executable to a location in your `$PATH` (e.g., `/usr/local/bin`) or note its location for the configuration step below.
 
+# Self-hosted Deployment (Docker + Traefik + Authelia)
+
+This fork ships an SSE transport plus everything needed to run Portainer
+MCP behind Traefik with **Authelia OIDC** as the identity provider, so
+[Claude.ai](https://claude.ai) can connect via the standard MCP OAuth
+flow. See [`docs/self-hosted.md`](docs/self-hosted.md) for the full
+walk-through; the short version:
+
+1. **Pre-built image** (built automatically from `main` via GitHub
+   Actions): `ghcr.io/mbay-odw/portainer-mcp:latest`.
+
+2. **Deploy via Docker Compose** – copy
+   [`docker-compose.yml`](docker-compose.yml) into a Portainer stack and
+   set these environment variables (see [`.env.example`](.env.example)):
+
+   | Variable | Description |
+   |---|---|
+   | `DOMAIN` | Public domain (e.g. `example.com`); the host becomes `portainer-mcp.${DOMAIN}` |
+   | `PORTAINER_URL` | Internal Portainer URL (e.g. `http://portainer:9000`) |
+   | `PORTAINER_TOKEN` | Portainer API token (Admin → User → Access tokens) |
+   | `MCP_API_KEY` | Static fallback Bearer token (used by Claude Desktop) |
+   | `OIDC_INTROSPECTION_URL` | e.g. `http://authelia:9091/api/oidc/introspection` |
+   | `OIDC_CLIENT_ID` | Defaults to `portainer-mcp` |
+   | `OIDC_CLIENT_SECRET` | **Plaintext** secret matching the bcrypt hash in Authelia |
+   | `LOG_LEVEL` | Optional; `debug` for verbose request/auth logs |
+
+3. **Register the OIDC client in Authelia** – add to your
+   `configuration.yml` under `identity_providers.oidc.clients`:
+
+   ```yaml
+   - client_id: portainer-mcp
+     client_name: Claude Portainer MCP
+     authorization_policy: one_factor
+     client_secret: $2b$12$...        # bcrypt hash of OIDC_CLIENT_SECRET
+     redirect_uris:
+       - https://claude.ai/api/mcp/auth_callback
+     scopes: [openid, profile, email, offline_access, address, phone, groups]
+     grant_types: [authorization_code, refresh_token]
+     response_types: [code]
+     token_endpoint_auth_method: client_secret_post
+     introspection_endpoint_auth_method: client_secret_basic
+   ```
+
+   Generate the bcrypt hash with:
+   ```bash
+   docker run --rm authelia/authelia:latest \
+     authelia crypto hash generate bcrypt --password 'your-plaintext-secret'
+   ```
+
+4. **Mirror Authelia under the MCP host via Traefik** – drop
+   [`traefik/portainer-mcp-oauth.yml`](traefik/portainer-mcp-oauth.yml)
+   into your Traefik file-provider directory (e.g.
+   `/etc/traefik/dynamic/`) and update the `Host(...)` rules to your
+   actual hostname. This exposes Authelia's `/.well-known/*`,
+   `/api/oidc/*`, `/authorize`, `/consent`, `/static` paths under
+   `https://portainer-mcp.${DOMAIN}/...` so Claude.ai can complete the
+   OAuth dance against the same origin as the MCP server.
+
+5. **Add the connector in Claude.ai** with URL
+   `https://portainer-mcp.${DOMAIN}/sse`. On first connect Claude.ai
+   redirects to Authelia for login and then talks to the MCP server with
+   a real OIDC Bearer token.
+
 # Usage
 
 With Claude Desktop, configure it like so:

@@ -16,6 +16,8 @@ services:
       - OIDC_INTROSPECTION_URL=${OIDC_INTROSPECTION_URL:-http://authelia:9091/api/oidc/introspection}
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-portainer-mcp}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      # Logging – set to "debug" for verbose request/auth logs.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     # Pass --disable-version-check via CMD already; add other flags here if needed.
     # command: ["-disable-version-check", "-read-only"]
     expose:
@@ -38,7 +40,16 @@ services:
       - "traefik.http.services.portainer-mcp-svc.loadbalancer.server.port=8000"
     networks:
       - traefik
+      # Add the network where your Portainer container lives so the MCP
+      # server can reach it on its internal hostname (e.g. portainer:9000).
+      # Set PORTAINER_NETWORK to the actual external network name; it
+      # defaults to "portainer_default" (the typical compose-project name
+      # of an out-of-the-box Portainer install).
+      - portainer
 
 networks:
   traefik:
     external: true
+  portainer:
+    external: true
+    name: ${PORTAINER_NETWORK:-portainer_default}
