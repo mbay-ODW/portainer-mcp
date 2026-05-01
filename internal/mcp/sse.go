@@ -16,15 +16,16 @@ import (
 // StartSSE begins listening for MCP protocol messages over Server-Sent Events.
 // This is a blocking call that runs until the HTTP server is closed.
 //
+// Implementation deliberately mirrors the hero-mcp Python server: simple
+// 401 with no body and no WWW-Authenticate header, no OAuth discovery
+// endpoints. Auth happens entirely via OIDC token introspection against
+// Authelia (or a static fallback Bearer token for Claude Desktop).
+//
 // Authentication (configured via env vars):
 //   - MCP_API_KEY              : static Bearer token (optional fallback)
 //   - OIDC_INTROSPECTION_URL   : Authelia introspection endpoint (RFC 7662)
 //   - OIDC_CLIENT_ID           : client id used for introspection auth
 //   - OIDC_CLIENT_SECRET       : client secret used for introspection auth
-//
-// Discovery (RFC 9728 + RFC 8414, both unauthenticated):
-//   - OAUTH_ISSUER             : public Authelia base URL
-//   - MCP_SERVER_URL           : public URL of this MCP server
 //
 // Auth order on incoming requests:
 //  1. If MCP_API_KEY is set and Authorization == "Bearer <MCP_API_KEY>" → allow
@@ -38,35 +39,21 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 	oidcIntrospectionURL := os.Getenv("OIDC_INTROSPECTION_URL")
 	oidcClientID := os.Getenv("OIDC_CLIENT_ID")
 	oidcClientSecret := os.Getenv("OIDC_CLIENT_SECRET")
-	oauthIssuer := os.Getenv("OAUTH_ISSUER")
-	mcpServerURL := os.Getenv("MCP_SERVER_URL")
 
 	authConfigured := mcpAPIKey != "" || (oidcIntrospectionURL != "" && oidcClientID != "" && oidcClientSecret != "")
 
 	log.Info().
 		Bool("static_token", mcpAPIKey != "").
 		Bool("oidc_introspection", oidcIntrospectionURL != "" && oidcClientID != "" && oidcClientSecret != "").
-		Bool("oauth_discovery", oauthIssuer != "" && mcpServerURL != "").
 		Msg("SSE auth config")
 
-	// Use "/messages/" (with trailing slash, plural) to match the convention
-	// used by the official Python/TS MCP SDKs and Claude.ai's expectations.
+	// "/sse" + "/messages/" – same convention as the Python/TS MCP SDKs and
+	// the other MCP servers in this stack.
 	sseServer := server.NewSSEServer(s.srv,
 		server.WithMessageEndpoint("/messages/"),
 		server.WithSSEEndpoint("/sse"),
 	)
 
-	// RFC 9728 §5.1: when returning 401 from a protected resource, the
-	// WWW-Authenticate header should include a `resource_metadata` parameter
-	// pointing at the protected-resource metadata URL. Without it, Claude.ai
-	// cannot bootstrap the OAuth flow and shows generic errors instead of
-	// redirecting to Authelia.
-	wwwAuth := `Bearer realm="portainer-mcp"`
-	if mcpServerURL != "" {
-		wwwAuth = `Bearer realm="portainer-mcp", resource_metadata="` + mcpServerURL + `/.well-known/oauth-protected-resource"`
-	}
-
-	// Auth middleware – wraps SSE + message handlers.
 	authMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -100,53 +87,13 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("authorization", authPreview).
-				Str("www_authenticate", wwwAuth).
 				Dur("auth_elapsed", time.Since(start)).
 				Msg("auth denied – returning 401")
-			w.Header().Set("WWW-Authenticate", wwwAuth)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		})
 	}
 
 	mux := http.NewServeMux()
-
-	// RFC 9728 – OAuth 2.0 Protected Resource Metadata.
-	// Claude.ai fetches this FIRST to discover which authorization server
-	// protects this resource. Must be public (no auth).
-	if oauthIssuer != "" && mcpServerURL != "" {
-		mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"resource":                 mcpServerURL,
-				"authorization_servers":    []string{oauthIssuer},
-				"bearer_methods_supported": []string{"header"},
-				"scopes_supported":         []string{"openid", "profile", "email"},
-			})
-		})
-	}
-
-	// RFC 8414 – OAuth 2.0 Authorization Server Metadata.
-	// Describes all Authelia endpoints Claude.ai needs for the OAuth PKCE flow.
-	if oauthIssuer != "" {
-		mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"issuer":                           oauthIssuer,
-				"authorization_endpoint":           oauthIssuer + "/api/oidc/authorization",
-				"token_endpoint":                   oauthIssuer + "/api/oidc/token",
-				"jwks_uri":                         oauthIssuer + "/jwks.json",
-				"introspection_endpoint":           oauthIssuer + "/api/oidc/introspection",
-				"response_types_supported":         []string{"code"},
-				"grant_types_supported":            []string{"authorization_code", "refresh_token"},
-				"code_challenge_methods_supported": []string{"S256"},
-				"scopes_supported":                 []string{"openid", "profile", "email"},
-			})
-		})
-	}
-
-	// Authenticated MCP endpoints – path conventions mirror the Python/TS SDKs
-	// (and the other MCP servers in this stack) so Claude.ai treats them the
-	// same way.
 	mux.Handle("/sse", authMiddleware(sseServer.SSEHandler()))
 	mux.Handle("/messages/", authMiddleware(sseServer.MessageHandler()))
 

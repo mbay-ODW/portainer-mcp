@@ -16,10 +16,6 @@ services:
       - OIDC_INTROSPECTION_URL=${OIDC_INTROSPECTION_URL:-http://authelia:9091/api/oidc/introspection}
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-portainer-mcp}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
-      # Public Authelia URL – RFC 8414 OAuth Authorization Server Metadata
-      - OAUTH_ISSUER=${OAUTH_ISSUER}
-      # Public URL of this MCP server – RFC 9728 Protected Resource Metadata
-      - MCP_SERVER_URL=${MCP_SERVER_URL:-https://portainer-mcp.${DOMAIN}}
     # Pass --disable-version-check via CMD already; add other flags here if needed.
     # command: ["-disable-version-check", "-read-only"]
     expose:
@@ -39,11 +35,6 @@ services:
       - "traefik.http.routers.portainer-mcp-msg.tls=true"
       - "traefik.http.routers.portainer-mcp-msg.tls.certresolver=mydnschallenge"
       - "traefik.http.routers.portainer-mcp-msg.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file"
-      - "traefik.http.routers.portainer-mcp-wellknown.rule=Host(`portainer-mcp.${DOMAIN}`) && PathPrefix(`/.well-known`)"
-      - "traefik.http.routers.portainer-mcp-wellknown.entrypoints=websecure"
-      - "traefik.http.routers.portainer-mcp-wellknown.service=portainer-mcp-svc"
-      - "traefik.http.routers.portainer-mcp-wellknown.tls=true"
-      - "traefik.http.routers.portainer-mcp-wellknown.tls.certresolver=mydnschallenge"
       - "traefik.http.services.portainer-mcp-svc.loadbalancer.server.port=8000"
     networks:
       - traefik
