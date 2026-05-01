@@ -104,8 +104,19 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 	mux := http.NewServeMux()
 	// Streamable HTTP (preferred by current Claude.ai clients).
 	mux.Handle("/mcp", authMiddleware(streamableServer))
-	// Legacy SSE transport (Claude Desktop, older clients, fallback).
-	mux.Handle("/sse", authMiddleware(sseServer.SSEHandler()))
+	// /sse: dispatch by method so a single connector URL covers both
+	// transports.
+	//   POST /sse  → Streamable HTTP (current spec, used by claude.ai)
+	//   GET  /sse  → classic SSE handshake (Claude Desktop / older clients)
+	// This matches the behaviour of the Python MCP servers in this stack
+	// (hero-mcp, mail-mcp, whatsapp-mcp, paperless-mcp).
+	mux.Handle("/sse", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			streamableServer.ServeHTTP(w, r)
+			return
+		}
+		sseServer.SSEHandler().ServeHTTP(w, r)
+	})))
 	mux.Handle("/messages/", authMiddleware(sseServer.MessageHandler()))
 
 	log.Info().Str("addr", addr).Msg("portainer-mcp SSE server listening")
