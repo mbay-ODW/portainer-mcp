@@ -54,15 +54,39 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 	// Auth middleware – wraps SSE + message handlers.
 	authMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			authHeader := r.Header.Get("Authorization")
+			authPreview := "(none)"
+			if authHeader != "" {
+				if len(authHeader) > 20 {
+					authPreview = authHeader[:20] + "…"
+				} else {
+					authPreview = authHeader
+				}
+			}
+			log.Debug().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("remote", r.RemoteAddr).
+				Str("authorization", authPreview).
+				Msg("incoming request")
+
 			if !authConfigured {
+				log.Debug().Msg("auth not configured – passing through")
 				next.ServeHTTP(w, r)
 				return
 			}
 			if isAuthorized(r, mcpAPIKey, oidcIntrospectionURL, oidcClientID, oidcClientSecret) {
+				log.Debug().Dur("auth_elapsed", time.Since(start)).Msg("auth ok")
 				next.ServeHTTP(w, r)
 				return
 			}
-			log.Warn().Str("path", r.URL.Path).Msg("auth denied")
+			log.Warn().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("authorization", authPreview).
+				Dur("auth_elapsed", time.Since(start)).
+				Msg("auth denied – returning 401")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="portainer-mcp"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		})
@@ -127,21 +151,26 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 	}
 
 	if staticKey != "" && auth == "Bearer "+staticKey {
-		log.Debug().Msg("static Bearer token matched")
+		log.Debug().Msg("static MCP_API_KEY Bearer token matched")
 		return true
 	}
 
 	if !strings.HasPrefix(auth, "Bearer ") {
-		log.Debug().Msg("Authorization header is not a Bearer token")
+		log.Debug().Str("scheme", strings.SplitN(auth, " ", 2)[0]).Msg("Authorization header is not a Bearer token")
 		return false
 	}
 
 	if introspectURL == "" || clientID == "" || clientSecret == "" {
-		log.Debug().Msg("OIDC introspection not fully configured")
+		log.Warn().
+			Bool("introspect_url_set", introspectURL != "").
+			Bool("client_id_set", clientID != "").
+			Bool("client_secret_set", clientSecret != "").
+			Msg("Bearer token presented but OIDC introspection not fully configured")
 		return false
 	}
 
 	token := strings.TrimPrefix(auth, "Bearer ")
+	log.Debug().Int("token_len", len(token)).Str("introspect_url", introspectURL).Msg("calling OIDC introspection")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -156,28 +185,33 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(clientID, clientSecret)
 
+	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Error().Err(err).Msg("introspection request failed")
+		log.Error().Err(err).Dur("elapsed", time.Since(start)).Msg("introspection request failed")
 		return false
 	}
 	defer resp.Body.Close()
+	log.Debug().Int("status", resp.StatusCode).Dur("elapsed", time.Since(start)).Msg("introspection HTTP response")
 
 	if resp.StatusCode != http.StatusOK {
-		log.Warn().Int("status", resp.StatusCode).Msg("introspection returned non-200")
+		log.Warn().Int("status", resp.StatusCode).Msg("introspection returned non-200 – denying")
 		return false
 	}
 
 	var data struct {
-		Active bool `json:"active"`
+		Active bool   `json:"active"`
+		Sub    string `json:"sub,omitempty"`
+		Scope  string `json:"scope,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		log.Error().Err(err).Msg("failed to decode introspection response")
 		return false
 	}
 	if !data.Active {
-		log.Debug().Msg("OIDC token not active")
+		log.Warn().Msg("OIDC token not active – denying")
 		return false
 	}
+	log.Debug().Str("sub", data.Sub).Str("scope", data.Scope).Msg("OIDC token active – allowing")
 	return true
 }
