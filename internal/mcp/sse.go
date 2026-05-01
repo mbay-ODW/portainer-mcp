@@ -49,7 +49,22 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 		Bool("oauth_discovery", oauthIssuer != "" && mcpServerURL != "").
 		Msg("SSE auth config")
 
-	sseServer := server.NewSSEServer(s.srv)
+	// Use "/messages/" (with trailing slash, plural) to match the convention
+	// used by the official Python/TS MCP SDKs and Claude.ai's expectations.
+	sseServer := server.NewSSEServer(s.srv,
+		server.WithMessageEndpoint("/messages/"),
+		server.WithSSEEndpoint("/sse"),
+	)
+
+	// RFC 9728 §5.1: when returning 401 from a protected resource, the
+	// WWW-Authenticate header should include a `resource_metadata` parameter
+	// pointing at the protected-resource metadata URL. Without it, Claude.ai
+	// cannot bootstrap the OAuth flow and shows generic errors instead of
+	// redirecting to Authelia.
+	wwwAuth := `Bearer realm="portainer-mcp"`
+	if mcpServerURL != "" {
+		wwwAuth = `Bearer realm="portainer-mcp", resource_metadata="` + mcpServerURL + `/.well-known/oauth-protected-resource"`
+	}
 
 	// Auth middleware – wraps SSE + message handlers.
 	authMiddleware := func(next http.Handler) http.Handler {
@@ -85,9 +100,10 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("authorization", authPreview).
+				Str("www_authenticate", wwwAuth).
 				Dur("auth_elapsed", time.Since(start)).
 				Msg("auth denied – returning 401")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="portainer-mcp"`)
+			w.Header().Set("WWW-Authenticate", wwwAuth)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		})
 	}
@@ -128,9 +144,11 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 		})
 	}
 
-	// Authenticated MCP endpoints
+	// Authenticated MCP endpoints – path conventions mirror the Python/TS SDKs
+	// (and the other MCP servers in this stack) so Claude.ai treats them the
+	// same way.
 	mux.Handle("/sse", authMiddleware(sseServer.SSEHandler()))
-	mux.Handle("/message", authMiddleware(sseServer.MessageHandler()))
+	mux.Handle("/messages/", authMiddleware(sseServer.MessageHandler()))
 
 	log.Info().Str("addr", addr).Msg("portainer-mcp SSE server listening")
 	httpServer := &http.Server{
