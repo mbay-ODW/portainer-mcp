@@ -48,10 +48,18 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 		Msg("SSE auth config")
 
 	// "/sse" + "/messages/" – same convention as the Python/TS MCP SDKs and
-	// the other MCP servers in this stack.
+	// the other MCP servers in this stack (used by Claude Desktop and older
+	// Claude.ai clients).
 	sseServer := server.NewSSEServer(s.srv,
 		server.WithMessageEndpoint("/messages/"),
 		server.WithSSEEndpoint("/sse"),
+	)
+
+	// Streamable HTTP transport (current MCP spec). Claude.ai probes
+	// /mcp with POST/GET first; if we don't speak it the client falls into
+	// a reconnect loop on /sse.
+	streamableServer := server.NewStreamableHTTPServer(s.srv,
+		server.WithEndpointPath("/mcp"),
 	)
 
 	authMiddleware := func(next http.Handler) http.Handler {
@@ -94,6 +102,9 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 	}
 
 	mux := http.NewServeMux()
+	// Streamable HTTP (preferred by current Claude.ai clients).
+	mux.Handle("/mcp", authMiddleware(streamableServer))
+	// Legacy SSE transport (Claude Desktop, older clients, fallback).
 	mux.Handle("/sse", authMiddleware(sseServer.SSEHandler()))
 	mux.Handle("/messages/", authMiddleware(sseServer.MessageHandler()))
 

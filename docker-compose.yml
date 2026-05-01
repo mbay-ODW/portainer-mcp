@@ -37,6 +37,13 @@ services:
       - "traefik.http.routers.portainer-mcp-msg.tls=true"
       - "traefik.http.routers.portainer-mcp-msg.tls.certresolver=mydnschallenge"
       - "traefik.http.routers.portainer-mcp-msg.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file"
+      # Streamable HTTP transport (preferred by Claude.ai)
+      - "traefik.http.routers.portainer-mcp-http.rule=Host(`portainer-mcp.${DOMAIN}`) && PathPrefix(`/mcp`)"
+      - "traefik.http.routers.portainer-mcp-http.entrypoints=websecure"
+      - "traefik.http.routers.portainer-mcp-http.service=portainer-mcp-svc"
+      - "traefik.http.routers.portainer-mcp-http.tls=true"
+      - "traefik.http.routers.portainer-mcp-http.tls.certresolver=mydnschallenge"
+      - "traefik.http.routers.portainer-mcp-http.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file"
       - "traefik.http.services.portainer-mcp-svc.loadbalancer.server.port=8000"
     networks:
       - traefik
