@@ -27,6 +27,7 @@ RUN apk add --no-cache ca-certificates && \
 
 WORKDIR /app
 COPY --from=build /out/portainer-mcp /app/portainer-mcp
+RUN chown -R mcp:mcp /app
 
 USER mcp
 
