@@ -1,0 +1,73 @@
+# Traefik dynamic config – mirrors Authelia's OAuth/OIDC endpoints under
+# the portainer-mcp host so Claude.ai can use them without cross-origin
+# tricks. Drop this into the directory configured as Traefik's file
+# provider (e.g. /etc/traefik/dynamic/) and reload.
+#
+# Replace `portainer-mcp.example.com` with your actual host.
+
+http:
+  middlewares:
+    rewrite-authorize-portainer:
+      replacePath:
+        path: "/api/oidc/authorization"
+
+  routers:
+    portainer-mcp-authorize:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/authorize`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      middlewares: [rewrite-authorize-portainer]
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-root:
+      rule: "Host(`portainer-mcp.example.com`) && Path(`/`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-oidc:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/api/oidc`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-api:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/api`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-consent:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/consent`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-static:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/static`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+    portainer-mcp-wellknown:
+      rule: "Host(`portainer-mcp.example.com`) && PathPrefix(`/.well-known`)"
+      entrypoints: [websecure]
+      service: authelia-oidc
+      tls:
+        certResolver: mydnschallenge
+
+  # Shared Authelia OIDC service – used by all MCP servers.
+  # Note: if you already have this service defined in another file (e.g. for
+  # hero-mcp), remove the `services` block from one of the files to avoid
+  # Traefik logging "service already defined" warnings.
+  services:
+    authelia-oidc:
+      loadBalancer:
+        servers:
+          - url: "http://authelia:9091"
