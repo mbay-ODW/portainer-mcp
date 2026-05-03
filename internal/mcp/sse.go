@@ -211,18 +211,23 @@ func authorize(r *http.Request, staticKey, introspectURL, clientID, clientSecret
 	return true, ""
 }
 
-// writeUnauthorized writes a 401 response with an RFC 6750 WWW-Authenticate
-// header. `reason` should be "no_header" for the initial challenge and
-// "invalid_token" once a token was presented but rejected – the latter
-// triggers the refresh-token flow on the OAuth client.
+// writeUnauthorized writes a 401 response.
+//
+//   - reason == "invalid_token": include an RFC 6750
+//     `WWW-Authenticate: Bearer error="invalid_token"` challenge so the
+//     OAuth client (Claude.ai) runs the silent refresh-token flow
+//     instead of doing a full reconnect.
+//   - reason == "no_header" (or anything else): emit a naked 401 with
+//     NO WWW-Authenticate header. A `Bearer realm="…"` challenge here
+//     would short-circuit Claude.ai's OAuth discovery (which expects a
+//     plain 401 to fall through to /.well-known/oauth-authorization-
+//     server lookup).
 func writeUnauthorized(w http.ResponseWriter, reason string) {
-	const realm = "portainer-mcp"
-	var challenge string
 	if reason == "invalid_token" {
-		challenge = `Bearer realm="` + realm + `", error="invalid_token", error_description="The access token expired or is invalid"`
-	} else {
-		challenge = `Bearer realm="` + realm + `"`
+		w.Header().Set(
+			"WWW-Authenticate",
+			`Bearer realm="portainer-mcp", error="invalid_token", error_description="The access token expired or is invalid"`,
+		)
 	}
-	w.Header().Set("WWW-Authenticate", challenge)
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }

@@ -69,4 +69,8 @@ By default Authelia shows a consent page on every OAuth login. For an MCP server
 
 ## How this works with this server
 
-This server emits an RFC 6750 `WWW-Authenticate: Bearer error="invalid_token"` header on 401 responses when a token is presented but rejected (expired or invalid). That signals to Claude.ai's OAuth client to run the silent **refresh-token flow** instead of falling back to a full reconnect. The combination of long refresh tokens + the standards-compliant 401 challenge means a connector can stay live for months without manual intervention.
+This server emits an RFC 6750 `WWW-Authenticate: Bearer error="invalid_token"` header on 401 responses **only when a token was presented and rejected** (expired or invalid). That signals to Claude.ai's OAuth client to run the silent **refresh-token flow** instead of falling back to a full reconnect.
+
+When no token is presented at all (initial connect), the 401 is intentionally returned **without** a WWW-Authenticate header so Claude.ai's default OAuth discovery flow can kick in (fetching `/.well-known/oauth-authorization-server` to locate Authelia). Sending a `Bearer realm="…"` challenge there would make the client treat the resource as plain Basic-Bearer and the discovery flow would never run.
+
+The combination of long refresh tokens + the standards-compliant 401 challenge means a connector can stay live for months without manual intervention.
