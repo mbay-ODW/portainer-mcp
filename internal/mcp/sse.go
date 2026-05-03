@@ -86,7 +86,8 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if isAuthorized(r, mcpAPIKey, oidcIntrospectionURL, oidcClientID, oidcClientSecret) {
+			ok, reason := authorize(r, mcpAPIKey, oidcIntrospectionURL, oidcClientID, oidcClientSecret)
+			if ok {
 				log.Debug().Dur("auth_elapsed", time.Since(start)).Msg("auth ok")
 				next.ServeHTTP(w, r)
 				return
@@ -95,9 +96,10 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Str("authorization", authPreview).
+				Str("reason", reason).
 				Dur("auth_elapsed", time.Since(start)).
 				Msg("auth denied – returning 401")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			writeUnauthorized(w, reason)
 		})
 	}
 
@@ -128,23 +130,29 @@ func (s *PortainerMCPServer) StartSSE(addr string) error {
 	return httpServer.ListenAndServe()
 }
 
-// isAuthorized returns true if the incoming request carries a valid Bearer token.
-// Either matches the static MCP_API_KEY or is an active OIDC token per introspection.
-func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSecret string) bool {
+// authorize inspects the request's Authorization header.
+// Returns (ok, reason) where reason is one of:
+//   - ""               – ok, no error
+//   - "no_header"      – nothing to authenticate against (initial auth)
+//   - "invalid_token"  – token presented but invalid/expired/wrong scheme
+//
+// The reason drives the WWW-Authenticate header on the 401 response so OAuth
+// clients can distinguish "refresh your token" from "start over".
+func authorize(r *http.Request, staticKey, introspectURL, clientID, clientSecret string) (bool, string) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		log.Debug().Msg("no Authorization header")
-		return false
+		return false, "no_header"
 	}
 
 	if staticKey != "" && auth == "Bearer "+staticKey {
 		log.Debug().Msg("static MCP_API_KEY Bearer token matched")
-		return true
+		return true, ""
 	}
 
 	if !strings.HasPrefix(auth, "Bearer ") {
 		log.Debug().Str("scheme", strings.SplitN(auth, " ", 2)[0]).Msg("Authorization header is not a Bearer token")
-		return false
+		return false, "invalid_token"
 	}
 
 	if introspectURL == "" || clientID == "" || clientSecret == "" {
@@ -153,7 +161,7 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 			Bool("client_id_set", clientID != "").
 			Bool("client_secret_set", clientSecret != "").
 			Msg("Bearer token presented but OIDC introspection not fully configured")
-		return false
+		return false, "invalid_token"
 	}
 
 	token := strings.TrimPrefix(auth, "Bearer ")
@@ -167,7 +175,7 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, introspectURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		log.Error().Err(err).Msg("failed to build introspection request")
-		return false
+		return false, "invalid_token"
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(clientID, clientSecret)
@@ -176,14 +184,14 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Error().Err(err).Dur("elapsed", time.Since(start)).Msg("introspection request failed")
-		return false
+		return false, "invalid_token"
 	}
 	defer resp.Body.Close()
 	log.Debug().Int("status", resp.StatusCode).Dur("elapsed", time.Since(start)).Msg("introspection HTTP response")
 
 	if resp.StatusCode != http.StatusOK {
 		log.Warn().Int("status", resp.StatusCode).Msg("introspection returned non-200 – denying")
-		return false
+		return false, "invalid_token"
 	}
 
 	var data struct {
@@ -193,12 +201,28 @@ func isAuthorized(r *http.Request, staticKey, introspectURL, clientID, clientSec
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		log.Error().Err(err).Msg("failed to decode introspection response")
-		return false
+		return false, "invalid_token"
 	}
 	if !data.Active {
 		log.Warn().Msg("OIDC token not active – denying")
-		return false
+		return false, "invalid_token"
 	}
 	log.Debug().Str("sub", data.Sub).Str("scope", data.Scope).Msg("OIDC token active – allowing")
-	return true
+	return true, ""
+}
+
+// writeUnauthorized writes a 401 response with an RFC 6750 WWW-Authenticate
+// header. `reason` should be "no_header" for the initial challenge and
+// "invalid_token" once a token was presented but rejected – the latter
+// triggers the refresh-token flow on the OAuth client.
+func writeUnauthorized(w http.ResponseWriter, reason string) {
+	const realm = "portainer-mcp"
+	var challenge string
+	if reason == "invalid_token" {
+		challenge = `Bearer realm="` + realm + `", error="invalid_token", error_description="The access token expired or is invalid"`
+	} else {
+		challenge = `Bearer realm="` + realm + `"`
+	}
+	w.Header().Set("WWW-Authenticate", challenge)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }
