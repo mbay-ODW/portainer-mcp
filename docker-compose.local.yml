@@ -1,0 +1,28 @@
+# Local development stack – binds to 127.0.0.1 only, no Traefik, no
+# Authelia, no TLS. Reads Portainer credentials from a local .env.
+#
+# Usage:
+#   cp .env.example .env   # set PORTAINER_URL + PORTAINER_TOKEN
+#   docker compose -f docker-compose.local.yml up
+#
+# Connect from Claude Desktop with:
+#   {"mcpServers": {"portainer-local": {"url": "http://localhost:8004/sse"}}}
+# or use the /mcp endpoint for Streamable-HTTP.
+#
+# Auth is intentionally disabled – do NOT expose this port to the network.
+services:
+  portainer-mcp:
+    image: ghcr.io/mbay-odw/portainer-mcp:latest
+    container_name: portainer-mcp-local
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - MCP_TRANSPORT=sse
+      - PORT=8000
+      # Portainer connection – use the public Portainer URL when running
+      # outside its docker network.
+      - PORTAINER_URL=${PORTAINER_URL}
+      - PORTAINER_TOKEN=${PORTAINER_TOKEN}
+      # Auth deliberately not set → all requests pass through.
+    ports:
+      - "127.0.0.1:8004:8000"
