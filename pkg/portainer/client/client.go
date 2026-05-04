@@ -3,6 +3,7 @@ package client
 import (
 	"crypto/tls"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -103,13 +104,28 @@ func NewPortainerClient(serverURL string, token string, opts ...ClientOption) *P
 		}
 	}
 
-	normalizedURL := strings.TrimRight(serverURL, "/")
-	if !strings.HasPrefix(normalizedURL, "http://") && !strings.HasPrefix(normalizedURL, "https://") {
-		normalizedURL = "https://" + normalizedURL
+	// Decompose the user-supplied URL into scheme + host:port. The upstream
+	// SDK's `client.NewPortainerClient(host, …)` expects `host` WITHOUT a
+	// scheme (it pre-pends "https" itself unless WithScheme() overrides
+	// it). Passing "http://portainer:9000" as host produces the broken URL
+	// "https://http://portainer:9000/api". See:
+	//   https://github.com/portainer/client-api-go/blob/v2.31.2/client/client.go#L78
+	trimmed := strings.TrimRight(serverURL, "/")
+	scheme := "https"
+	hostOnly := trimmed
+	if u, err := url.Parse(trimmed); err == nil && u.Scheme != "" && u.Host != "" {
+		scheme = u.Scheme
+		hostOnly = u.Host
 	}
+	normalizedURL := scheme + "://" + hostOnly
 
 	return &PortainerClient{
-		cli: client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(options.skipTLSVerify)),
+		cli: client.NewPortainerClient(
+			hostOnly,
+			token,
+			client.WithScheme(scheme),
+			client.WithSkipTLSVerify(options.skipTLSVerify),
+		),
 		rawCli: &rawHTTPClient{
 			serverURL: normalizedURL,
 			token:     token,
