@@ -36,6 +36,47 @@ func (c *rawHTTPClient) apiRequest(method, path string, body interface{}) (*http
 	return c.httpCli.Do(req)
 }
 
+// proxyRequest performs a raw HTTP request through the Portainer proxy
+// endpoints (Docker/Kubernetes APIs). Used instead of the upstream
+// client-api-go ProxyClient because that one hardcodes "https://" in
+// its URL template, breaking deployments that talk to Portainer over
+// HTTP (e.g. internal Docker hostname http://portainer:9000).
+//
+//   - path        : full path under the Portainer host, e.g.
+//     "/api/endpoints/1/docker/containers/json"
+//   - method      : HTTP method
+//   - queryParams : optional query string entries
+//   - headers     : optional extra request headers
+//   - body        : optional request body
+func (c *rawHTTPClient) proxyRequest(
+	method, path string,
+	queryParams map[string]string,
+	headers map[string]string,
+	body io.Reader,
+) (*http.Response, error) {
+	url := c.serverURL + path
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proxy request: %w", err)
+	}
+
+	if len(queryParams) > 0 {
+		q := req.URL.Query()
+		for k, v := range queryParams {
+			q.Set(k, v)
+		}
+		req.URL.RawQuery = q.Encode()
+	}
+
+	req.Header.Set("x-api-key", c.token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	return c.httpCli.Do(req)
+}
+
 // GetLocalStacks retrieves all regular (non-edge) stacks from the Portainer server.
 //
 // Returns:
@@ -96,10 +137,10 @@ func (c *PortainerClient) GetLocalStackFile(id int) (string, error) {
 
 // updateLocalStackRequest is the request body for updating a local stack
 type updateLocalStackRequest struct {
-	StackFileContent string                   `json:"stackFileContent"`
+	StackFileContent string                    `json:"stackFileContent"`
 	Env              []models.LocalStackEnvVar `json:"env"`
-	Prune            bool                     `json:"prune"`
-	PullImage        bool                     `json:"pullImage"`
+	Prune            bool                      `json:"prune"`
+	PullImage        bool                      `json:"pullImage"`
 }
 
 // UpdateLocalStack updates a regular stack's compose file and environment variables.
@@ -138,8 +179,8 @@ func (c *PortainerClient) UpdateLocalStack(id, endpointId int, file string, env 
 
 // createLocalStackRequest is the request body for creating a local stack
 type createLocalStackRequest struct {
-	Name             string                   `json:"name"`
-	StackFileContent string                   `json:"stackFileContent"`
+	Name             string                    `json:"name"`
+	StackFileContent string                    `json:"stackFileContent"`
 	Env              []models.LocalStackEnvVar `json:"env,omitempty"`
 }
 
