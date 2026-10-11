@@ -22,6 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # -------- runtime stage --------
 FROM alpine:3.20
+# Docker-Secrets: NAME_FILE=/run/secrets/... wird beim Start zu NAME geladen
+COPY --chmod=0755 env-secrets.sh /usr/local/bin/env-secrets
 RUN apk add --no-cache ca-certificates && \
     adduser -D -u 10001 mcp
 
@@ -36,5 +38,5 @@ ENV MCP_TRANSPORT=sse \
 
 EXPOSE 8000
 
-ENTRYPOINT ["/app/portainer-mcp"]
+ENTRYPOINT ["/usr/local/bin/env-secrets", "/app/portainer-mcp"]
 CMD ["-disable-version-check"]
