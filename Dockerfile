@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # -------- build stage --------
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 RUN apk add --no-cache git ca-certificates
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/portainer-mcp
 
 # -------- runtime stage --------
-FROM alpine:3.20
+FROM alpine:3.22
 # Docker-Secrets: NAME_FILE=/run/secrets/... wird beim Start zu NAME geladen
 COPY --chmod=0755 env-secrets.sh /usr/local/bin/env-secrets
 RUN apk add --no-cache ca-certificates && \
